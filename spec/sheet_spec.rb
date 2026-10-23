@@ -107,6 +107,24 @@ describe 'sheet' do
         rows = namespaced_sheet.rows.map { |r| r }
         expect(load_cell(rows, 'A10')).to eq(0.15)
       end
+
+      context 'with different prefixes for the SpreadsheetML namespace' do
+        let(:namespaced_book) { Creek::Book.new('spec/fixtures/sample_namespaced_mixed_prefixes.xlsx') }
+
+        it 'parses rows correctly' do
+          rows = namespaced_sheet.rows.map { |r| r }
+          expect(load_cell(rows, 'A10')).to eq(0.15)
+        end
+      end
+
+      context 'with a prefixed root and default-namespace descendants' do
+        let(:namespaced_book) { Creek::Book.new('spec/fixtures/sample_namespaced_default_descendants.xlsx') }
+
+        it 'parses rows correctly' do
+          rows = namespaced_sheet.rows.map { |r| r }
+          expect(load_cell(rows, 'A10')).to eq(0.15)
+        end
+      end
     end
   end
 
@@ -129,6 +147,16 @@ describe 'sheet' do
     it 'returns nil for empty cell without preloading images' do
       image = sheet_with_images.images_at('B3')
       expect(image).to eq(nil)
+    end
+
+    context 'when the sheet rels contain an unused drawing relationship' do
+      let(:book_with_stale_rel) { Creek::Book.new('spec/fixtures/sample-with-images-stale-drawing-rel.xlsx') }
+      let(:sheet_with_stale_rel) { Creek::Sheet.new(book_with_stale_rel, 'Sheet 1', 1, '', '', '1', sheetfile) }
+
+      it 'returns images from the drawing the sheet references' do
+        image = sheet_with_stale_rel.with_images.images_at('A2')[0]
+        expect(image.class).to eq(Pathname)
+      end
     end
   end
 
