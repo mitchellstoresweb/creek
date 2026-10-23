@@ -98,19 +98,14 @@ module Creek
           cell_type = nil
           cell_style_idx = nil
           @book.files.file.open(path) do |xml|
-            prefix = ''
+            prefix = nil
             name_row = "row"
             name_c = "c"
             name_v = "v"
             name_t = "t"
             Nokogiri::XML::Reader.from_io(xml).each do |node|
-              if prefix.empty? && node.namespaces.any?
-                namespace = node.namespaces.detect{|_key, uri| uri == SPREADSHEETML_URI }
-                prefix = if namespace && namespace[0].start_with?('xmlns:')
-                           namespace[0].delete_prefix('xmlns:') + ':'
-                         else
-                           ''
-                         end
+              if prefix.nil? && node.node_type == opener
+                prefix = node.namespace_uri == SPREADSHEETML_URI && node.prefix ? "#{node.prefix}:" : ''
                 name_row = "#{prefix}row"
                 name_c = "#{prefix}c"
                 name_v = "#{prefix}v"
@@ -184,16 +179,12 @@ module Creek
     # Sheet xml contains drawing relationship ID.
     # Sheet relationships xml contains drawing file's location.
     def extract_drawing_filepath
-      # Read drawing relationship ID from the sheet.
-      sheet_filepath = "xl/#{@sheetfile}"
-      drawing = parse_xml(sheet_filepath).css('drawing').first
-      return if drawing.nil?
+      # Read sheet rels to find drawing file's location without parsing the whole sheet.
+      sheet_rels_filepath = expand_to_rels_path("xl/#{@sheetfile}")
+      return unless file_exist?(sheet_rels_filepath)
 
-      drawing_rid = drawing.attributes['id'].value
-
-      # Read sheet rels to find drawing file's location.
-      sheet_rels_filepath = expand_to_rels_path(sheet_filepath)
-      parse_xml(sheet_rels_filepath).css("Relationship[@Id='#{drawing_rid}']").first.attributes['Target'].value
+      drawing = parse_xml(sheet_rels_filepath).css('Relationship').detect { |relationship| relationship['Type'].to_s.end_with?('/drawing') }
+      drawing&.attributes&.[]('Target')&.value
     end
 
     def cell_id(column, use_simple_rows_format, row_number)
