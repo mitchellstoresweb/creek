@@ -98,30 +98,20 @@ module Creek
           cell_type = nil
           cell_style_idx = nil
           @book.files.file.open(path) do |xml|
-            prefix = ''
-            name_row = "row"
-            name_c = "c"
-            name_v = "v"
-            name_t = "t"
             Nokogiri::XML::Reader.from_io(xml).each do |node|
-              if prefix.empty? && node.namespaces.any?
-                namespace = node.namespaces.detect{|_key, uri| uri == SPREADSHEETML_URI }
-                prefix = if namespace && namespace[0].start_with?('xmlns:')
-                           namespace[0].delete_prefix('xmlns:') + ':'
-                         else
-                           ''
-                         end
-                name_row = "#{prefix}row"
-                name_c = "#{prefix}c"
-                name_v = "#{prefix}v"
-                name_t = "#{prefix}t"
-              end
-              if node.name == name_row && node.node_type == opener
+              node_type = node.node_type
+              next unless node_type == opener || node_type == closer
+
+              # Resolve each element's namespace individually: a worksheet may bind
+              # SpreadsheetML to several prefixes (or the default namespace) at once.
+              name = node.namespace_uri == SPREADSHEETML_URI ? node.local_name : node.name
+
+              if name == 'row' && node_type == opener
                 row = node.attributes
                 row['cells'] = {}
                 cells = {}
                 y << (include_meta_data ? row : cells) if node.self_closing?
-              elsif node.name == name_row && node.node_type == closer
+              elsif name == 'row' && node_type == closer
                 processed_cells = fill_in_empty_cells(cells, row['r'], cell, use_simple_rows_format)
                 @headers = processed_cells if with_headers && row['r'] == HEADERS_ROW_NUMBER
 
@@ -135,11 +125,11 @@ module Creek
 
                 row['cells'] = processed_cells
                 y << (include_meta_data ? row : processed_cells)
-              elsif node.name == name_c && node.node_type == opener
+              elsif name == 'c' && node_type == opener
                 cell_type      = node.attributes['t']
                 cell_style_idx = node.attributes['s']
                 cell           = node.attributes['r']
-              elsif (node.name == name_v || node.name == name_t) && node.node_type == opener
+              elsif (name == 'v' || name == 't') && node_type == opener
                 unless cell.nil?
                   node.read
                   cells[cell] = convert(node.value, cell_type, cell_style_idx)
@@ -186,14 +176,32 @@ module Creek
     def extract_drawing_filepath
       # Read drawing relationship ID from the sheet.
       sheet_filepath = "xl/#{@sheetfile}"
-      drawing = parse_xml(sheet_filepath).css('drawing').first
-      return if drawing.nil?
-
-      drawing_rid = drawing.attributes['id'].value
+      drawing_rid = extract_drawing_rid(sheet_filepath)
+      return if drawing_rid.nil?
 
       # Read sheet rels to find drawing file's location.
       sheet_rels_filepath = expand_to_rels_path(sheet_filepath)
-      parse_xml(sheet_rels_filepath).css("Relationship[@Id='#{drawing_rid}']").first.attributes['Target'].value
+      return unless file_exist?(sheet_rels_filepath)
+
+      relationship = parse_xml(sheet_rels_filepath).css('Relationship').detect { |rel| rel['Id'] == drawing_rid }
+      relationship&.[]('Target')
+    end
+
+    # Streams the sheet rather than parsing it into a document, which can take
+    # gigabytes for sheets with many (even empty) rows.
+    def extract_drawing_rid(sheet_filepath)
+      @book.files.file.open(sheet_filepath) do |xml|
+        Nokogiri::XML::Reader.from_io(xml).each do |node|
+          next unless node.node_type == Nokogiri::XML::Reader::TYPE_ELEMENT
+          name = node.namespace_uri == SPREADSHEETML_URI ? node.local_name : node.name
+          next unless name == 'drawing'
+
+          # attribute_hash is keyed by local name, so this reads r:id whatever its prefix.
+          # <drawing> is empty, so reading its attributes doesn't load the rest of the sheet.
+          return node.attribute_hash['id']
+        end
+      end
+      nil
     end
 
     def cell_id(column, use_simple_rows_format, row_number)
